@@ -17,7 +17,7 @@ const poppler = require('pdf-poppler');
 process.env.GOOGLE_APPLICATION_CREDENTIALS = 'C:\\Users\\garla\\OneDrive\\Desktop\\Hackathon\\backend\\credentials\\tokyo-comfort-437112-m2-bbbfc5627fa6.json';
 
 // RapidAPI Key
-const rapidapiKey = 'c5575346e8msh0abd11a4f6216d3p1a61cejsn67088012772a';
+const rapidapiKey = '3efdacf94emshf16c671952bd548p154347jsned18c78a2091';
 
 // Initialize the Express app
 const app = express();
@@ -89,32 +89,83 @@ const extractTextFromImage = async (imagePath) => {
 // Analyze text using GPT-4 API (via RapidAPI)
 const analyzeTextUsingRapidAPI = async (extractedText) => {
   const url = 'https://cheapest-gpt-4-turbo-gpt-4-vision-chatgpt-openai-ai-api.p.rapidapi.com/v1/chat/completions';
+  
   const headers = {
     'content-type': 'application/json',
     'X-RapidAPI-Key': rapidapiKey,
+    'X-RapidAPI-Host': 'cheapest-gpt-4-turbo-gpt-4-vision-chatgpt-openai-ai-api.p.rapidapi.com'
   };
   
+  const systemPrompt = `You are a medical expert. Analyze the medical report and provide a clear, structured response. 
+  Always follow this exact format:
+
+  1. Symptoms for disease:
+  - List all symptoms mentioned
+  - Be specific and clear
+
+  2. Why it is caused?:
+  - List all causes mentioned
+  - Include risk factors if any
+
+  3. What it is?:
+  - Provide clear diagnosis
+  - Include medical terminology with simple explanations
+
+  4. The stage of the disease:
+  - Specify current stage if mentioned
+  - Include severity assessment
+
+  5. What precautions we need to take?:
+  - List all recommended precautions
+  - Include lifestyle changes if applicable
+  - Mention follow-up requirements
+
+  Keep the format exactly as above with numbered points and clear line breaks.`;
+  
   const payload = {
-    model: 'gpt-4-turbo',
-    messages: [{ role: 'user', content: `Please format the following information:\n\n${extractedText}\n\nOutput only in the following format:\n1. Symptoms for disease:\n2. Why it is caused?:\n3. What it is?:\n4. The stage of the disease:\n5. What precautions we need to take?:` }],
-    max_tokens: 500,
-    temperature: 0.7,
+    model: 'gpt-4',
+    messages: [
+      { 
+        role: 'system', 
+        content: systemPrompt
+      },
+      {
+        role: 'user',
+        content: `Please analyze this medical report and provide analysis in the specified format: ${extractedText}`
+      }
+    ],
+    temperature: 0.3, // Lower temperature for more consistent formatting
+    max_tokens: 1000
   };
   
   try {
+    console.log('Sending request to GPT API...');
     const response = await axios.post(url, payload, { headers });
-    return response.data.choices[0].message.content;
+    
+    if (response.data && response.data.choices && response.data.choices[0]) {
+      const result = response.data.choices[0].message.content;
+      console.log('Analysis result:', result);
+      return result;
+    } else {
+      throw new Error('Invalid response structure from GPT API');
+    }
   } catch (error) {
-    console.error('Error analyzing text:', error.response ? error.response.data : error.message);
-    throw new Error(`Error analyzing text: ${error.message}`);
+    console.error('GPT API Error:', error);
+    throw error;
   }
 };
 
 // Translate text using Google Translate API
-const translateText = async (text, targetLanguage = 'en') => {
-  const translate = new Translate();
-  const [translatedText] = await translate.translate(text, targetLanguage);
-  return translatedText;
+const translateText = async (text, targetLanguage) => {
+    const translate = new Translate();
+    const languageCode = languageCodeMap[targetLanguage] || 'en';
+    try {
+        const [translatedText] = await translate.translate(text, languageCode);
+        return translatedText;
+    } catch (error) {
+        console.error('Translation error:', error);
+        throw new Error(`Translation failed: ${error.message}`);
+    }
 };
 
 // User Signup route
@@ -163,40 +214,51 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     const targetLanguage = req.body.language || 'en';
   
     try {
-      // Convert PDF to PNG if needed, otherwise process the file directly
-      const imagePath = inputFile.endsWith('.pdf') ? await convertPdfToPng(inputFile) : inputFile;
+        const imagePath = inputFile.endsWith('.pdf') ? await convertPdfToPng(inputFile) : inputFile;
+        const extractedText = await extractTextFromImage(imagePath);
+        
+        if (!extractedText || extractedText.trim() === '') {
+            return res.status(400).send('No valid text extracted from the image.');
+        }
   
-      // Extract text from the image
-      const extractedText = await extractTextFromImage(imagePath);
-      console.log('Extracted Text:', extractedText); // Log extracted text for debugging
+        // Get analysis in English first
+        const analyzedText = await analyzeTextUsingRapidAPI(extractedText);
+        
+        if (!analyzedText || analyzedText.trim() === '') {
+            return res.status(400).send('No valid analyzed text received from GPT-4 API.');
+        }
+
+        // Translate the analysis if a different language is selected
+        let finalOutput = analyzedText;
+        if (targetLanguage !== 'english') {
+            finalOutput = await translateText(analyzedText, targetLanguage);
+        }
   
-      // Check if extracted text is valid
-      if (!extractedText || extractedText.trim() === '') {
-        return res.status(400).send('No valid text extracted from the image.');
-      }
-  
-      // Analyze the text using GPT-4
-      const analyzedText = await analyzeTextUsingRapidAPI(extractedText);
-      console.log('Analyzed Text:', analyzedText); // Log analyzed text for debugging
-  
-      // Check if analyzed text is valid
-      if (!analyzedText || analyzedText.trim() === '') {
-        return res.status(400).send('No valid analyzed text received from GPT-4 API.');
-      }
-  
-      // Assuming analyzedText is a string, we can format it for output directly
-      const formattedOutput = analyzedText; // If it's already formatted, just send it back
-  
-      res.status(200).send({ formattedOutput });
+        res.status(200).send({ formattedOutput: finalOutput });
   
     } catch (error) {
-      console.error('Error in upload route:', error.message);
-      res.status(500).send(`Error: ${error.message}`);
+        console.error('Error in upload route:', error.message);
+        res.status(500).send(`Error: ${error.message}`);
     }
-  });
+});
 
-  
-  
+// Add language code mapping
+const languageCodeMap = {
+    'telugu': 'te',
+    'hindi': 'hi',
+    'tamil': 'ta',
+    'kannada': 'kn',
+    'malayalam': 'ml',
+    'marathi': 'mr',
+    'bengali': 'bn',
+    'gujarati': 'gu',
+    'punjabi': 'pa'
+};
+
+app.post('/x-ray-reports', async (req, res) => {
+    console.log("mama")
+})
+
 initializeDbAndServe();
 
 module.exports = app;
