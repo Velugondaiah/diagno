@@ -38,9 +38,24 @@ const initializeDbAndServe = async () => {
       filename: dbPath,
       driver: sqlite3.Database,
     });
-    app.listen(3005, () => {
-      console.log('Server is running on http://localhost:3005');
-    });
+
+    // Try different ports if 3005 is in use
+    const server = app.listen(3005)
+      .on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+          console.log('Port 3005 is busy, trying 3006...');
+          server.close();
+          app.listen(3006, () => {
+            console.log('Server is running on http://localhost:3006');
+          });
+        } else {
+          console.error(`Server error: ${err.message}`);
+        }
+      })
+      .on('listening', () => {
+        console.log('Server is running on http://localhost:3005');
+      });
+
   } catch (e) {
     console.error(`Error initializing DB: ${e.message}`);
     process.exit(1);
@@ -170,17 +185,38 @@ const translateText = async (text, targetLanguage) => {
 
 // User Signup route
 app.post('/signup', async (request, response) => {
-  const { username, firstname, lastname, email, phoneNumber, dateOfBirth, password } = request.body;
+  const { 
+    username, 
+    firstname, 
+    lastname, 
+    email, 
+    phoneNumber, 
+    dateOfBirth,
+    gender,
+    password,
+  } = request.body;
+  
   const hashedPassword = await bcrypt.hash(password, 10);
   const selectUserQuery = `SELECT * FROM users WHERE username = ?`;
   const dbUser = await db.get(selectUserQuery, [username]);
 
   if (!dbUser) {
     const createUserQuery = `
-      INSERT INTO users (username, firstname, lastname, password, email, phone_number, date_of_birth) 
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (username, 
+    firstname, 
+    lastname, 
+    email, 
+    phoneNumber, 
+    dateOfBirth,
+    gender,
+    password
+  )VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `;
-    const dbResponse = await db.run(createUserQuery, [username, firstname, lastname, hashedPassword, email, phoneNumber, dateOfBirth]);
+    const dbResponse = await db.run(createUserQuery, [
+      username, firstname, lastname, 
+      email, phoneNumber, dateOfBirth, 
+      gender,hashedPassword
+    ]);
     response.send({ success: 'User created', userId: dbResponse.lastID });
   } else {
     response.status(400).send('User already exists');
@@ -258,6 +294,37 @@ const languageCodeMap = {
 app.post('/x-ray-reports', async (req, res) => {
     console.log("mama")
 })
+
+// Add this endpoint to your backend
+app.get('/user-profile', async (request, response) => {
+  try {
+    // Get token from authorization header
+    const authHeader = request.headers.authorization;
+    const token = authHeader.split(' ')[1];
+    
+    // Verify token
+    const decoded = jwt.verify(token, 'MY_SECRET_TOKEN');
+    const username = decoded.username;
+    
+    // Get user data from database
+    const getUserQuery = `
+      SELECT username, firstname, lastname, email, 
+             phone_number, date_of_birth, gender, address, profile_image
+      FROM users 
+      WHERE username = ?`;
+    
+    const userData = await db.get(getUserQuery, [username]);
+    
+    if (!userData) {
+      return response.status(404).json({ error: 'User not found' });
+    }
+    
+    response.json(userData);
+  } catch (error) {
+    console.error('Error fetching profile:', error);
+    response.status(401).json({ error: 'Unauthorized' });
+  }
+});
 
 initializeDbAndServe();
 

@@ -20,7 +20,7 @@
     "deepl-translator": "^1.2.1",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
-    "google-translate-api": "^2.3.0",
+    "google-translate-api": "^0.1.1",
     "jimp": "^1.6.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
