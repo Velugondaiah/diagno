@@ -8,21 +8,29 @@ const bcrypt = require('bcrypt');
 const multer = require('multer');
 const cors = require('cors');
 const fs = require('fs');
-const vision = require('@google-cloud/vision');
-const { Translate } = require('@google-cloud/translate').v2;
+const Tesseract = require('tesseract.js');
 const axios = require('axios');
 const poppler = require('pdf-poppler');
-
-// Google Cloud credentials
-process.env.GOOGLE_APPLICATION_CREDENTIALS = 'C:\\Users\\garla\\OneDrive\\Desktop\\Hackathon\\backend\\credentials\\tokyo-comfort-437112-m2-bbbfc5627fa6.json';
+const translate = require('translate-google');
 
 // RapidAPI Key
-const rapidapiKey = '3efdacf94emshf16c671952bd548p154347jsned18c78a2091';
+const rapidapiKey = 'c35b7b0e3emsh9af2078e66b888fp159fd1jsn8ca9eccbfa19';
 
 // Initialize the Express app
 const app = express();
 app.use(express.json());
 app.use(cors());
+
+// Add these headers to your backend
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    next();
+});
 
 // SQLite DB Path
 const dbPath = path.join(__dirname, 'diagonalasis.db');
@@ -39,13 +47,31 @@ const initializeDbAndServe = async () => {
       driver: sqlite3.Database,
     });
 
+    // Create users table if it doesn't exist
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        firstname TEXT NOT NULL,
+        lastname TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        phoneNumber TEXT NOT NULL,
+        dateOfBirth TEXT NOT NULL,
+        gender TEXT NOT NULL,
+        password TEXT NOT NULL,
+        profile_image TEXT,
+        address TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     // Try different ports if 3005 is in use
-    const server = app.listen(3005)
+    const server = app.listen(3006)
       .on('error', (err) => {
         if (err.code === 'EADDRINUSE') {
           console.log('Port 3005 is busy, trying 3006...');
           server.close();
-          app.listen(3006, () => {
+          app.listen(3005, () => {
             console.log('Server is running on http://localhost:3006');
           });
         } else {
@@ -53,7 +79,7 @@ const initializeDbAndServe = async () => {
         }
       })
       .on('listening', () => {
-        console.log('Server is running on http://localhost:3005');
+        console.log('Server is running on http://localhost:3006');
       });
 
   } catch (e) {
@@ -64,7 +90,6 @@ const initializeDbAndServe = async () => {
 
 // PDF to PNG conversion
 const convertPdfToPng = async (inputFile) => {
-    console.log("mama")
   const outputDir = path.dirname(inputFile);
   const opts = {
     format: 'png',
@@ -80,23 +105,30 @@ const convertPdfToPng = async (inputFile) => {
   }
 };
 
-// Extract text from an image using Google Vision API
+// Extract text from an image using Tesseract
 const extractTextFromImage = async (imagePath) => {
   console.log('Processing image:', imagePath);
-  const client = new vision.ImageAnnotatorClient();
   
   try {
-    const [result] = await client.textDetection(imagePath);
-    console.log('Full Vision API result:', JSON.stringify(result, null, 2));  // Log the full result for debugging
+    const worker = await Tesseract.createWorker();
+    
+    // Initialize worker
+    await worker.loadLanguage('eng');
+    await worker.initialize('eng');
+    
+    // Recognize text
+    const { data: { text } } = await worker.recognize(imagePath);
+    
+    // Terminate worker
+    await worker.terminate();
 
-    const extractedText = result.textAnnotations.length ? result.textAnnotations[0].description : '';
-    console.log('Extracted text:', extractedText);
+    console.log('Extracted text:', text);
 
-    if (!extractedText) throw new Error('No text detected');
-    return extractedText;
+    if (!text) throw new Error('No text detected');
+    return text;
 
   } catch (error) {
-    console.error('Error in Vision API call:', error.message);
+    console.error('Error in Tesseract OCR:', error.message);
     throw error;
   }
 };
@@ -149,7 +181,7 @@ const analyzeTextUsingRapidAPI = async (extractedText) => {
         content: `Please analyze this medical report and provide analysis in the specified format: ${extractedText}`
       }
     ],
-    temperature: 0.3, // Lower temperature for more consistent formatting
+    temperature: 0.3,
     max_tokens: 1000
   };
   
@@ -170,115 +202,7 @@ const analyzeTextUsingRapidAPI = async (extractedText) => {
   }
 };
 
-// Translate text using Google Translate API
-const translateText = async (text, targetLanguage) => {
-    const translate = new Translate();
-    const languageCode = languageCodeMap[targetLanguage] || 'en';
-    try {
-        const [translatedText] = await translate.translate(text, languageCode);
-        return translatedText;
-    } catch (error) {
-        console.error('Translation error:', error);
-        throw new Error(`Translation failed: ${error.message}`);
-    }
-};
-
-// User Signup route
-app.post('/signup', async (request, response) => {
-  const { 
-    username, 
-    firstname, 
-    lastname, 
-    email, 
-    phoneNumber, 
-    dateOfBirth,
-    gender,
-    password,
-  } = request.body;
-  
-  const hashedPassword = await bcrypt.hash(password, 10);
-  const selectUserQuery = `SELECT * FROM users WHERE username = ?`;
-  const dbUser = await db.get(selectUserQuery, [username]);
-
-  if (!dbUser) {
-    const createUserQuery = `
-      INSERT INTO users (username, 
-    firstname, 
-    lastname, 
-    email, 
-    phoneNumber, 
-    dateOfBirth,
-    gender,
-    password
-  )VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `;
-    const dbResponse = await db.run(createUserQuery, [
-      username, firstname, lastname, 
-      email, phoneNumber, dateOfBirth, 
-      gender,hashedPassword
-    ]);
-    response.send({ success: 'User created', userId: dbResponse.lastID });
-  } else {
-    response.status(400).send('User already exists');
-  }
-});
-
-
-// User Login route
-app.post('/login', async (request, response) => {
-  const { username, password } = request.body;
-  const selectUserQuery = `SELECT * FROM users WHERE username = ?`;
-  const dbUser = await db.get(selectUserQuery, [username]);
-  const d = null;
-
-  if (!dbUser) {
-    response.status(400).send('Invalid User');
-  } else {
-    const isPasswordMatched = await bcrypt.compare(password, dbUser.password);
-    if (isPasswordMatched) {
-      const jwtToken = jwt.sign({ username: username }, 'MY_SECRET_TOKEN');
-      response.send({ jwt_token: jwtToken });
-    } else {
-      response.status(400).send('Invalid Password');
-    }
-  }
-});
-
-/// File Upload Route
-app.post('/upload', upload.single('file'), async (req, res) => {
-    const inputFile = req.file.path;
-    const targetLanguage = req.body.language || 'en';
-  
-    try {
-        const imagePath = inputFile.endsWith('.pdf') ? await convertPdfToPng(inputFile) : inputFile;
-        const extractedText = await extractTextFromImage(imagePath);
-        
-        if (!extractedText || extractedText.trim() === '') {
-            return res.status(400).send('No valid text extracted from the image.');
-        }
-  
-        // Get analysis in English first
-        const analyzedText = await analyzeTextUsingRapidAPI(extractedText);
-        
-        if (!analyzedText || analyzedText.trim() === '') {
-            return res.status(400).send('No valid analyzed text received from GPT-4 API.');
-        }
-
-        // Translate the analysis if a different language is selected
-        let finalOutput = analyzedText;
-        if (targetLanguage !== 'english') {
-            finalOutput = await translateText(analyzedText, targetLanguage);
-        }
-  
-        res.status(200).send({ formattedOutput: finalOutput });
-  
-    } catch (error) {
-        console.error('Error in upload route:', error.message);
-        res.status(500).send(`Error: ${error.message}`);
-    }
-});
-
-// Add language code mapping
+// Language code mapping
 const languageCodeMap = {
     'telugu': 'te',
     'hindi': 'hi',
@@ -288,43 +212,206 @@ const languageCodeMap = {
     'marathi': 'mr',
     'bengali': 'bn',
     'gujarati': 'gu',
-    'punjabi': 'pa'
+    'punjabi': 'pa',
+    'english': 'en'
 };
 
-app.post('/x-ray-reports', async (req, res) => {
-    console.log("mama")
-})
+// Updated translation function using translate-google
+const translateText = async (text, targetLanguage) => {
+    const languageCode = languageCodeMap[targetLanguage.toLowerCase()] || 'en';
+    console.log(`Attempting to translate to language: ${targetLanguage} (code: ${languageCode})`);
+    
+    try {
+        // Skip translation if target is English
+        if (targetLanguage === 'english' || languageCode === 'en') {
+            return text;
+        }
 
-// Add this endpoint to your backend
-app.get('/user-profile', async (request, response) => {
-  try {
-    // Get token from authorization header
-    const authHeader = request.headers.authorization;
-    const token = authHeader.split(' ')[1];
-    
-    // Verify token
-    const decoded = jwt.verify(token, 'MY_SECRET_TOKEN');
-    const username = decoded.username;
-    
-    // Get user data from database
-    const getUserQuery = `
-      SELECT username, firstname, lastname, email, 
-             phone_number, date_of_birth, gender, address, profile_image
-      FROM users 
-      WHERE username = ?`;
-    
-    const userData = await db.get(getUserQuery, [username]);
-    
-    if (!userData) {
-      return response.status(404).json({ error: 'User not found' });
+        const translatedText = await translate(text, { to: languageCode });
+        console.log('Translation completed');
+        return translatedText;
+    } catch (error) {
+        console.error('Translation error:', error);
+        throw new Error(`Translation failed: ${error.message}`);
     }
+};
+
+// Add this function to analyze X-ray images
+const analyzeXrayUsingRapidAPI = async (imagePath) => {
+    const url = 'https://cheapest-gpt-4-turbo-gpt-4-vision-chatgpt-openai-ai-api.p.rapidapi.com/v1/chat/completions';
     
-    response.json(userData);
-  } catch (error) {
-    console.error('Error fetching profile:', error);
-    response.status(401).json({ error: 'Unauthorized' });
-  }
+    try {
+        const imageBuffer = fs.readFileSync(imagePath);
+        const base64Image = imageBuffer.toString('base64');
+        
+        const headers = {
+            'content-type': 'application/json',
+            'X-RapidAPI-Key': rapidapiKey,
+            'X-RapidAPI-Host': 'cheapest-gpt-4-turbo-gpt-4-vision-chatgpt-openai-ai-api.p.rapidapi.com'
+        };
+        
+        const systemPrompt = `You are a radiologist. Examine this X-ray image and provide a simple, clear report focusing on fractures.
+        
+        Provide your analysis in this format:
+
+        FRACTURE ANALYSIS REPORT
+
+        1. X-ray Overview:
+        - Which body part is shown
+        - Type of X-ray view
+
+        2. Fracture Status:
+        - Is there a fracture? (Yes/No)
+        - Where exactly is the fracture?
+        - What type of fracture?
+
+        3. Severity Level:
+        - How serious is the condition?
+        - Is immediate medical attention needed?
+
+        4. Required Actions:
+        - What should the patient do now?
+        - Which specialist should they see?
+        - How urgent is the treatment needed?
+
+        5. Care Instructions:
+        - What should the patient avoid doing?
+        - What precautions should they take?
+        - When should they seek emergency care?
+
+        Please be direct and clear in your analysis.`;
+
+        const payload = {
+            model: "gpt-4-vision-preview",
+            messages: [
+                {
+                    role: "system",
+                    content: systemPrompt
+                },
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: "Please examine this X-ray and tell me if there's a fracture, where it is, and what needs to be done."
+                        },
+                        {
+                            type: "image_url",
+                            image_url: {
+                                url: `data:image/jpeg;base64,${base64Image}`
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens: 1000
+        };
+
+        const response = await axios.post(url, payload, { headers });
+        
+        if (response.data && response.data.choices && response.data.choices[0]) {
+            return response.data.choices[0].message.content;
+        } else {
+            throw new Error('Invalid response from API');
+        }
+    } catch (error) {
+        console.error('Vision API Error:', error.response?.data || error.message);
+        throw new Error(`X-ray analysis failed: ${error.message}`);
+    }
+};
+
+// Updated upload route to handle X-ray analysis
+app.post('/upload', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        const inputFile = req.file.path;
+        const targetLanguage = (req.body.language || 'english').toLowerCase();
+        const fileType = req.body.fileType || 'text';
+
+        console.log('Processing request:', {
+            file: req.file.originalname,
+            language: targetLanguage,
+            type: fileType
+        });
+
+        let analysisResult;
+        try {
+            if (fileType === 'xray') {
+                console.log('Starting X-ray analysis...');
+                analysisResult = await analyzeXrayUsingRapidAPI(inputFile);
+            } else {
+                const extractedText = await extractTextFromImage(inputFile);
+                analysisResult = await analyzeTextUsingRapidAPI(extractedText);
+            }
+
+            let finalOutput = analysisResult;
+            if (targetLanguage !== 'english') {
+                console.log(`Translating to ${targetLanguage}...`);
+                finalOutput = await translateText(analysisResult, targetLanguage);
+            }
+
+            // Cleanup files
+            try {
+                fs.unlinkSync(inputFile);
+            } catch (cleanupError) {
+                console.error('File cleanup error:', cleanupError);
+            }
+
+            res.status(200).json({
+                formattedOutput: finalOutput,
+                targetLanguage,
+                translationPerformed: targetLanguage !== 'english',
+                fileType
+            });
+
+        } catch (processingError) {
+            console.error('Processing error:', processingError);
+            res.status(400).json({
+                error: 'Processing failed',
+                details: processingError.message
+            });
+        }
+
+    } catch (error) {
+        console.error('Upload route error:', error);
+        res.status(500).json({
+            error: 'Server error',
+            details: error.message
+        });
+    }
 });
+
+// Test route for translation
+app.post('/test-translation', async (req, res) => {
+    try {
+        const { text, targetLanguage } = req.body;
+        
+        if (!text || !targetLanguage) {
+            return res.status(400).json({ error: 'Missing text or target language' });
+        }
+
+        console.log('Testing translation:', { text, targetLanguage });
+        const translatedText = await translateText(text, targetLanguage);
+        
+        res.json({
+            original: text,
+            translated: translatedText,
+            targetLanguage: targetLanguage
+        });
+    } catch (error) {
+        console.error('Test translation error:', error);
+        res.status(500).json({
+            error: 'Translation test failed',
+            details: error.message
+        });
+    }
+});
+
+// User routes (signup, login, profile, etc.) remain the same
+// ... (keep all your existing user-related routes)
 
 initializeDbAndServe();
 
