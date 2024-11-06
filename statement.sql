@@ -24,7 +24,7 @@ SELECT * FROM users;
 
  
 SELECT * FROM doctors;
-INSERT INTO doctors (name,specialization,appointment_cost,location,rating,phone_number,location_url,image_url) VALUES ('DR.Kushwanth','Infectious',100,'Charminar Hyderabad',4.5,'1234567890','https://example.com/john-doe','https://example.com/john-doe.jpg');
+INSERT INTO doctors (name,specialization,appointment_cost,location,rating,phone_number,location_url,image_url) VALUES ('Velu','Orthopedist',100,'Cubbon Park, Bangalore',4.5,'1234567890','https://example.com/john-doe','https://res.cloudinary.com/dcgmeefn2/image/upload/v1728062582/WhatsApp_Image_2024-10-04_at_22.31.24_7d025073_gjtx2c.jpg');
 
 SELECT * FROM doctors
 WHERE name = 'DR.Kushwanth';
@@ -47,3 +47,10 @@ CREATE TABLE appointments(
     FOREIGN KEY (doctor_id) REFERENCES doctors(id)
 );
 SELECT * FROM appointments;
+
+ALTER TABLE appointments ADD COLUMN status TEXT DEFAULT 'Pending';
+
+ALTER TABLE appointments ADD COLUMN user_id INTEGER;
+
+DELETE FROM appointments;
+

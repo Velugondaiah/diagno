@@ -15,7 +15,7 @@ const translate = require('translate-google');
 require('dotenv').config(); // Load environment variables
 
 // RapidAPI Key - Update this section
-const rapidapiKey = '33169e1b0bmsh020812e008c5a72p16d18bjsn7baf170e0067';
+const rapidapiKey = '54bd8d45b5mshbda6cdbbee7fe51p1ad5bfjsn9363f2cba62e';
 // Alternatively, you can use environment variable:
 // const rapidapiKey = process.env.RAPIDAPI_KEY || '33169e1b0bmsh020812e008c5a72p16d18bjsn7baf170e0067';
 
@@ -23,7 +23,7 @@ const rapidapiKey = '33169e1b0bmsh020812e008c5a72p16d18bjsn7baf170e0067';
 const app = express();
 app.use(express.json());
 app.use(cors({
-    origin: 'http://localhost:3000',
+    origin: ['http://localhost:3000','https://diagno-ai-one-api-hack-kpr.vercel.app/'],
     methods: ['GET', 'POST'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -113,6 +113,7 @@ const initializeDbAndServe = async () => {
             CREATE TABLE IF NOT EXISTS appointments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 doctor_id INTEGER NOT NULL,
+                patient_id INTEGER NOT NULL,
                 patient_name VARCHAR(50) NOT NULL,
                 gender VARCHAR(10) NOT NULL,
                 age INTEGER NOT NULL,
@@ -122,7 +123,8 @@ const initializeDbAndServe = async () => {
                 address VARCHAR(255) NOT NULL,
                 specialist VARCHAR(50) NOT NULL,
                 location VARCHAR(50) NOT NULL,
-                FOREIGN KEY (doctor_id) REFERENCES doctors(id)
+                FOREIGN KEY (doctor_id) REFERENCES doctors(id),
+                FOREIGN KEY (patient_id) REFERENCES users(id)
             )
         `);
 
@@ -581,6 +583,7 @@ app.post('/api/appointments', async (req, res) => {
     try {
         const {
             doctor_id,
+            user_id,
             patient_name,
             gender,
             age,
@@ -592,11 +595,12 @@ app.post('/api/appointments', async (req, res) => {
             location
         } = req.body;
 
-        console.log('Received appointment data:', req.body); // Debug log
+        console.log('Received appointment data:', req.body);
 
         const query = `
             INSERT INTO appointments (
                 doctor_id,
+                user_id,
                 patient_name,
                 gender,
                 age,
@@ -606,11 +610,12 @@ app.post('/api/appointments', async (req, res) => {
                 address,
                 specialist,
                 location
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         const result = await db.run(query, [
             doctor_id,
+            user_id,
             patient_name,
             gender,
             age,
@@ -622,7 +627,7 @@ app.post('/api/appointments', async (req, res) => {
             location
         ]);
 
-        console.log('Insert result:', result); // Debug log
+        console.log('Insert result:', result);
 
         res.status(201).json({
             message: 'Appointment created successfully',
@@ -633,6 +638,157 @@ app.post('/api/appointments', async (req, res) => {
         res.status(500).json({
             message: 'Failed to create appointment',
             error: error.message
+        });
+    }
+});
+
+// Add these new endpoints after other routes
+
+// Get user profile endpoint
+app.get('/api/user/:userId', async (request, response) => {
+    try {
+        const { userId } = request.params;
+        const query = `SELECT id, username, firstname, lastname, email, phoneNumber, dateOfBirth, gender, profile_image, address 
+                      FROM users 
+                      WHERE id = ?`;
+        
+        const user = await db.get(query, [userId]);
+        
+        if (!user) {
+            return response.status(404).json({ error: 'User not found' });
+        }
+
+        response.json(user);
+    } catch (error) {
+        console.error('Error fetching user profile:', error);
+        response.status(500).json({ 
+            error: 'Internal server error', 
+            details: error.message 
+        });
+    }
+});
+
+// Get user appointments endpoint
+app.get('/api/appointments/:userId', async (request, response) => {
+    try {
+        const { userId } = request.params;
+        
+        const query = `
+            SELECT a.*, d.name as doctor_name
+            FROM appointments a
+            LEFT JOIN doctors d ON a.doctor_id = d.id
+            WHERE a.patient_id = ?
+            ORDER BY a.date DESC, a.time DESC
+        `;
+        
+        const appointments = await db.all(query, [userId]);
+        
+        response.json(appointments);
+    } catch (error) {
+        console.error('Error fetching appointments:', error);
+        response.status(500).json({ 
+            error: 'Internal server error', 
+            details: error.message 
+        });
+    }
+});
+
+// Add this middleware function after your imports
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+        return res.status(401).json({ error: 'Authentication token required' });
+    }
+
+    jwt.verify(token, 'MY_SECRET_TOKEN', (err, user) => {
+        if (err) {
+            return res.status(403).json({ error: 'Invalid or expired token' });
+        }
+        req.user = user;
+        next();
+    });
+};
+
+// Add this new endpoint for booking history
+app.get('/booking-history', authenticateToken, async (req, res) => {
+    try {
+        // Get username from the verified token
+        const username = req.user.username;
+        
+        // First get the user's ID
+        const userQuery = 'SELECT id FROM users WHERE username = ?';
+        const user = await db.get(userQuery, [username]);
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Then get their appointments
+        const query = `
+            SELECT 
+                a.*,
+                d.name as doctor_name,
+                CASE
+                    WHEN a.date > date('now') THEN 'Upcoming'
+                    ELSE 'Completed'
+                END as status
+            FROM appointments a
+            LEFT JOIN doctors d ON a.doctor_id = d.id
+            WHERE a.user_id = ?
+            ORDER BY a.date DESC, a.time DESC
+        `;
+        
+        const appointments = await db.all(query, [user.id]);
+        res.json(appointments);
+        
+    } catch (error) {
+        console.error('Error fetching booking history:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch booking history',
+            details: error.message 
+        });
+    }
+});
+
+// Add this new endpoint for user profile
+app.get('/user-profile', authenticateToken, async (req, res) => {
+    try {
+        const username = req.user.username;
+        console.log('Fetching profile for username:', username);
+
+        // Update query to match actual table structure
+        const query = `
+            SELECT id, username, firstname, lastname, email, phoneNumber, 
+                   dateOfBirth, gender, created_at
+            FROM users 
+            WHERE username = ?
+        `;
+        
+        const user = await db.get(query, [username]);
+        console.log('Query result:', user);
+
+        if (!user) {
+            console.log('No user found for username:', username);
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Format the date
+        if (user.dateOfBirth) {
+            user.dateOfBirth = new Date(user.dateOfBirth).toLocaleDateString();
+        }
+        if (user.created_at) {
+            user.created_at = new Date(user.created_at).toLocaleDateString();
+        }
+
+        res.json(user);
+        
+    } catch (error) {
+        console.error('Error in /user-profile:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch user profile',
+            details: error.message 
         });
     }
 });
