@@ -12,10 +12,11 @@ const Tesseract = require('tesseract.js');
 const axios = require('axios');
 const poppler = require('pdf-poppler');
 const translate = require('translate-google');
+const nodemailer = require('nodemailer');
 require('dotenv').config(); // Load environment variables
 
 // RapidAPI Key - Update this section
-const rapidapiKey = '54bd8d45b5mshbda6cdbbee7fe51p1ad5bfjsn9363f2cba62e';
+const rapidapiKey = '6ff9f620a3msh1e96a906bb2facfp10b89bjsn80d61791c0b9';
 // Alternatively, you can use environment variable:
 // const rapidapiKey = process.env.RAPIDAPI_KEY || '33169e1b0bmsh020812e008c5a72p16d18bjsn7baf170e0067';
 
@@ -23,7 +24,7 @@ const rapidapiKey = '54bd8d45b5mshbda6cdbbee7fe51p1ad5bfjsn9363f2cba62e';
 const app = express();
 app.use(express.json());
 app.use(cors({
-    origin: ['http://localhost:3000','https://diagno-ai-one-api-hack-kpr.vercel.app/'],
+    origin: ['http://localhost:3000','https://diagno-ai-one-api-hack-kpr-3t9i-pvxmba0i0.vercel.app'],
     methods: ['GET', 'POST'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -45,6 +46,64 @@ let db = null;
 
 // Set up multer for file uploads
 const upload = multer({ dest: 'uploads/' });
+
+// Add this after other environment variables
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASSWORD
+  }
+});
+
+// Add this helper function after other helper functions
+const sendAppointmentEmail = async (appointmentDetails, userEmail) => {
+  console.log('Sending email to:', userEmail);
+  console.log('Appointment details:', appointmentDetails);
+
+  const emailTemplate = `
+    <h2>Appointment Confirmation</h2>
+    <p>Dear ${appointmentDetails.patient_name},</p>
+    <p>Your appointment has been successfully booked. Here are the details:</p>
+    <ul>
+      <li>Date: ${appointmentDetails.date}</li>
+      <li>Time: ${appointmentDetails.time}</li>
+      <li>Location: ${appointmentDetails.location}</li>
+      <li>Specialist: ${appointmentDetails.specialist}</li>
+    </ul>
+    <p>Please arrive 10 minutes before your scheduled appointment time.</p>
+    <p>If you need to reschedule or cancel your appointment, please contact us.</p>
+    <p>Thank you for choosing our services!</p>
+  `;
+
+  const mailOptions = {
+    from: process.env.EMAIL_USER,
+    to: userEmail,
+    subject: 'Appointment Confirmation',
+    html: emailTemplate
+  };
+
+  try {
+    console.log('Attempting to send email with options:', {
+      from: mailOptions.from,
+      to: mailOptions.to,
+      subject: mailOptions.subject
+    });
+    
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Email sent successfully:', info.response);
+    return info;
+  } catch (error) {
+    console.error('Detailed email error:', error);
+    throw error;
+  }
+};
+
+// Add this helper function
+const isValidEmail = (email) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+};
 
 // Add the check-availability endpoint
 app.get('/api/appointments/check-availability', async (req, res) => {
@@ -595,45 +654,88 @@ app.post('/api/appointments', async (req, res) => {
             location
         } = req.body;
 
-        console.log('Received appointment data:', req.body);
+        // Double-check availability before proceeding
+        const availabilityCheck = await db.get(
+            `SELECT COUNT(*) as count 
+             FROM appointments 
+             WHERE doctor_id = ? AND date = ? AND time = ?`,
+            [doctor_id, date, time]
+        );
 
-        const query = `
-            INSERT INTO appointments (
-                doctor_id,
-                user_id,
+        if (availabilityCheck.count > 0) {
+            return res.status(409).json({
+                message: 'This time slot has already been booked',
+                error: 'Slot unavailable'
+            });
+        }
+
+        // Get user email
+        const userQuery = 'SELECT email FROM users WHERE id = ?';
+        const user = await db.get(userQuery, [user_id]);
+
+        if (!user) {
+            return res.status(404).json({
+                message: 'User not found',
+                error: 'Invalid user ID'
+            });
+        }
+
+        if (!isValidEmail(user.email)) {
+            return res.status(400).json({
+                message: 'Invalid email address',
+                error: 'The user\'s email address is not valid'
+            });
+        }
+
+        // Insert appointment with transaction to ensure atomicity
+        await db.run('BEGIN TRANSACTION');
+
+        // Check availability one final time within transaction
+        const finalCheck = await db.get(
+            `SELECT COUNT(*) as count 
+             FROM appointments 
+             WHERE doctor_id = ? AND date = ? AND time = ?`,
+            [doctor_id, date, time]
+        );
+
+        if (finalCheck.count > 0) {
+            await db.run('ROLLBACK');
+            return res.status(409).json({
+                message: 'This time slot has already been booked',
+                error: 'Slot unavailable'
+            });
+        }
+
+        // Proceed with insertion
+        const result = await db.run(
+            `INSERT INTO appointments (
+                doctor_id, user_id, patient_name, gender, age,
+                date, time, phone_number, address, specialist, location
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [doctor_id, user_id, patient_name, gender, age, date, time,
+             phone_number, address, specialist, location]
+        );
+
+        await db.run('COMMIT');
+
+        // Send confirmation email
+        await sendAppointmentEmail(
+            {
                 patient_name,
-                gender,
-                age,
                 date,
                 time,
-                phone_number,
-                address,
-                specialist,
-                location
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `;
-
-        const result = await db.run(query, [
-            doctor_id,
-            user_id,
-            patient_name,
-            gender,
-            age,
-            date,
-            time,
-            phone_number,
-            address,
-            specialist,
-            location
-        ]);
-
-        console.log('Insert result:', result);
+                location,
+                specialist
+            },
+            user.email
+        );
 
         res.status(201).json({
-            message: 'Appointment created successfully',
+            message: 'Appointment created successfully and confirmation email sent',
             id: result.lastID
         });
     } catch (error) {
+        await db.run('ROLLBACK');
         console.error('Error creating appointment:', error);
         res.status(500).json({
             message: 'Failed to create appointment',
@@ -791,6 +893,30 @@ app.get('/user-profile', authenticateToken, async (req, res) => {
             details: error.message 
         });
     }
+});
+
+// Add this test endpoint
+app.post('/test-email', async (req, res) => {
+  try {
+    await sendAppointmentEmail(
+      {
+        patient_name: "Test Patient",
+        date: "2024-03-20",
+        time: "10:00 AM",
+        location: "Test Location",
+        specialist: "Test Specialist"
+      },
+      req.body.email // Email to test with
+    );
+    
+    res.json({ message: 'Test email sent successfully' });
+  } catch (error) {
+    console.error('Error sending test email:', error);
+    res.status(500).json({ 
+      error: 'Failed to send test email',
+      details: error.message 
+    });
+  }
 });
 
 // Initialize the server

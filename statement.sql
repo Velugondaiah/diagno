@@ -54,3 +54,4 @@ ALTER TABLE appointments ADD COLUMN user_id INTEGER;
 
 DELETE FROM appointments;
 
+
