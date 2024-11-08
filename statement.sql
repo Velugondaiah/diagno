@@ -97,3 +97,10 @@ CREATE TABLE appointments (
     FOREIGN KEY (doctor_id) REFERENCES doctors(id),
     FOREIGN KEY (user_id) REFERENCES users(id)  -- Added this constraint
 );
+select * from doctors
+
+select * from appointments;
+ALTER TABLE appointments ADD COLUMN status TEXT DEFAULT 'Pending';
+INSERT into doctors(name,specialization,appointment_cost,location,rating,phone_number,location_url,image_url , username, password , experience ,qualification ,profile_image ) VALUES ('DR.Kushwanth','Cardiologist',100,'Connaught Place, Delhi',4.5,'9182234363','https://example.com/john-doe','https://res.cloudinary.com/dcgmeefn2/image/upload/v1728062525/WhatsApp_Image_2024-10-04_at_22.31.23_bc75fe8f_kl1ztr.jpg' , 'Kushwanth', 'Kushwanth',10,'MBBS','NULL'),
+('DR.Giri','Cardiologist',200,'Connaught Place, Delhi',3.9,'8299524710','https://example.com/john-doe','https://res.cloudinary.com/dcgmeefn2/image/upload/v1728062525/WhatsApp_Image_2024-10-04_at_22.31.23_bc75fe8f_kl1ztr.jpg' , 'Giri', 'Giri',10,'MBBS','NULL');
+select * from doctors where location = 'Connaught Place, Delhi'

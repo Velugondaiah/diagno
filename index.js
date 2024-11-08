@@ -16,7 +16,7 @@ const nodemailer = require('nodemailer');
 require('dotenv').config(); // Load environment variables
 
 // RapidAPI Key - Update this section
-const rapidapiKey = '63e78f55dcmsh6e43a6115080095p183defjsnc901c1fe526f';
+const rapidapiKey = '92eed022c1msh168a6fdb3893794p11374ejsn8732f9d5ce4f';
 // Alternatively, you can use environment variable:
 // const rapidapiKey = process.env.RAPIDAPI_KEY || '33169e1b0bmsh020812e008c5a72p16d18bjsn7baf170e0067';
 
@@ -24,16 +24,19 @@ const rapidapiKey = '63e78f55dcmsh6e43a6115080095p183defjsnc901c1fe526f';
 const app = express();
 app.use(express.json());
 app.use(cors({
-    origin: ['http://localhost:3001','https://diagno-ai-one-api-hack-kpr-3t9i-pvxmba0i0.vercel.app'],
-    methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    origin: ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
 }));
 
 // Add CORS headers
 app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Allow-Origin', req.headers.origin);
+    res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    
     if (req.method === 'OPTIONS') {
         return res.sendStatus(200);
     }
@@ -105,6 +108,20 @@ const isValidEmail = (email) => {
   return emailRegex.test(email);
 };
 
+// Add this helper function to check availability
+const checkAvailability = async (db, doctorId, date, time) => {
+    const query = `
+        SELECT COUNT(*) as count 
+        FROM appointments 
+        WHERE doctor_id = ? 
+        AND date = ? 
+        AND time = ?
+    `;
+    
+    const result = await db.get(query, [doctorId, date, time]);
+    return result.count === 0; // Returns true if slot is available
+};
+
 // Add the check-availability endpoint
 app.get('/api/appointments/check-availability', async (req, res) => {
     try {
@@ -142,6 +159,26 @@ app.get('/api/appointments/check-availability', async (req, res) => {
 });
 
 // Initialize SQLite Database and Server
+const startServer = (port) => {
+    return new Promise((resolve, reject) => {
+        const server = app.listen(port)
+            .on('listening', () => {
+                console.log(`Server started successfully on port ${port}`);
+                console.log(`Server is running at http://localhost:${port}`);
+                resolve(server);
+            })
+            .on('error', (err) => {
+                if (err.code === 'EADDRINUSE') {
+                    console.log(`Port ${port} is busy, trying ${port + 1}...`);
+                    resolve(startServer(port + 1));
+                } else {
+                    console.error('Server error:', err);
+                    reject(err);
+                }
+            });
+    });
+};
+
 const initializeDbAndServe = async () => {
     try {
         db = await open({
@@ -149,62 +186,69 @@ const initializeDbAndServe = async () => {
             driver: sqlite3.Database,
         });
 
-        // Create users table if it doesn't exist
-        await db.exec(`
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                firstname TEXT NOT NULL,
-                lastname TEXT NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                phoneNumber TEXT NOT NULL,
-                dateOfBirth TEXT NOT NULL,
-                gender TEXT NOT NULL,
-                password TEXT NOT NULL,
-                profile_image TEXT,
-                address TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
+        // Drop existing appointments table if you want to recreate it
+        await db.exec('DROP TABLE IF EXISTS appointments');
 
-        // Add this new table creation
+        // Create appointments table with status column
         await db.exec(`
             CREATE TABLE IF NOT EXISTS appointments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 doctor_id INTEGER NOT NULL,
                 user_id INTEGER NOT NULL,
-                patient_name VARCHAR(50) NOT NULL,
-                gender VARCHAR(10) NOT NULL,
-                age INTEGER NOT NULL,
-                date DATE NOT NULL,
-                time TIME NOT NULL,
-                phone_number VARCHAR(15) NOT NULL,
-                address VARCHAR(255) NOT NULL,
-                specialist VARCHAR(50) NOT NULL,
-                location VARCHAR(50) NOT NULL,
-                FOREIGN KEY (doctor_id) REFERENCES doctors(id),
-                FOREIGN KEY (user_id) REFERENCES users(id)
+                patient_name TEXT NOT NULL,
+                gender TEXT,
+                age INTEGER,
+                date TEXT NOT NULL,
+                time TEXT NOT NULL,
+                phone_number TEXT,
+                address TEXT,
+                specialist TEXT,
+                location TEXT,
+                status TEXT DEFAULT 'Upcoming',
+                symptoms TEXT,
+                prescription TEXT,
+                diagnosis TEXT,
+                notes TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (doctor_id) REFERENCES doctors (id),
+                FOREIGN KEY (user_id) REFERENCES users (id)
             )
         `);
 
-        const server = app.listen(3008)
-            .on('error', (err) => {
-                if (err.code === 'EADDRINUSE') {
-                    console.log('Port 3008 is busy, trying 3009...');
-                    server.close();
-                    app.listen(3007, () => {
-                        console.log('Server is running on http://localhost:3008');
-                    });
-                } else {
-                    console.error(`Server error: ${err.message}`);
-                }
-            })
-            .on('listening', () => {
-                console.log('Server is running on http://localhost:3008');
-            });
+        // Add test appointment
+        const testDoctor = await db.get('SELECT id FROM doctors LIMIT 1');
+        if (testDoctor) {
+            await db.run(`
+                INSERT INTO appointments (
+                    doctor_id,
+                    user_id,
+                    patient_name,
+                    date,
+                    time,
+                    status,
+                    symptoms,
+                    prescription
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                testDoctor.id,
+                1, // test user_id
+                'Test Patient',
+                '2024-03-20',
+                '10:00 AM',
+                'Upcoming',
+                'Fever, Headache',
+                'Rest and medication'
+            ]);
+            console.log('Test appointment created');
+        }
+
+        // Start the server
+        app.listen(3008, () => {
+            console.log('Server Running at http://localhost:3008/');
+        });
 
     } catch (e) {
-        console.error(`Error initializing DB: ${e.message}`);
+        console.error(`DB Error:`, e);
         process.exit(1);
     }
 };
@@ -689,24 +733,29 @@ app.post('/api/appointments', async (req, res) => {
             location
         } = req.body;
 
-        // Get user email from the database
-        const userQuery = 'SELECT email FROM users WHERE id = ?';
-        const user = await db.get(userQuery, [user_id]);
+        console.log('Checking availability for:', { doctor_id, date, time });
 
-        if (!user) {
-            return res.status(404).json({
-                message: 'User not found',
-                error: 'Invalid user ID'
+        // Check if the slot is available
+        const isAvailable = await checkAvailability(db, doctor_id, date, time);
+        
+        if (!isAvailable) {
+            return res.status(409).json({
+                error: 'Time slot already booked',
+                message: 'Please select a different time or date'
             });
         }
 
-        if (!isValidEmail(user.email)) {
+        console.log('Received appointment data:', req.body);
+
+        // Validate required fields
+        if (!doctor_id || !user_id || !patient_name || !date || !time) {
             return res.status(400).json({
-                message: 'Invalid email address',
-                error: 'The user\'s email address is not valid'
+                error: 'Missing required fields',
+                details: 'doctor_id, user_id, patient_name, date, and time are required'
             });
         }
 
+        // Insert the appointment
         const query = `
             INSERT INTO appointments (
                 doctor_id,
@@ -719,8 +768,9 @@ app.post('/api/appointments', async (req, res) => {
                 phone_number,
                 address,
                 specialist,
-                location
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                location,
+                status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         const result = await db.run(query, [
@@ -734,30 +784,22 @@ app.post('/api/appointments', async (req, res) => {
             phone_number,
             address,
             specialist,
-            location
+            location,
+            'Upcoming'
         ]);
 
-        // Send confirmation email
-        await sendAppointmentEmail(
-            {
-                patient_name,
-                date,
-                time,
-                location,
-                specialist
-            },
-            user.email
-        );
+        console.log('Appointment created:', result);
 
         res.status(201).json({
-            message: 'Appointment created successfully and confirmation email sent',
-            id: result.lastID
+            message: 'Appointment booked successfully',
+            appointmentId: result.lastID
         });
+
     } catch (error) {
-        console.error('Error creating appointment:', error);
+        console.error('Error booking appointment:', error);
         res.status(500).json({
-            message: 'Failed to create appointment',
-            error: error.message
+            error: 'Failed to book appointment',
+            details: error.message
         });
     }
 });
@@ -937,7 +979,198 @@ app.post('/test-email', async (req, res) => {
   }
 });
 
+// Add doctor login endpoint
+app.post('/doctor-login', async (request, response) => {
+    try {
+        const { username, password } = request.body;
+        
+        const selectDoctorQuery = `
+            SELECT id, username, password, name, specialization, location, experience, qualification, profile_image
+            FROM doctors 
+            WHERE username = ? AND password = ?
+        `;
+        
+        const doctor = await db.get(selectDoctorQuery, [username, password]);
+        console.log('Found doctor:', { ...doctor, password: '[HIDDEN]' });
+        
+        if (!doctor) {
+            return response.status(400).json({ error: 'Invalid username or password' });
+        }
+
+        // Create doctor object without password
+        const doctorData = {
+            id: doctor.id,
+            username: doctor.username,
+            name: doctor.name,
+            specialization: doctor.specialization,
+            location: doctor.location,
+            experience: doctor.experience,
+            qualification: doctor.qualification,
+            profile_image: doctor.profile_image
+        };
+
+        const jwtToken = jwt.sign({ username: username, role: 'doctor' }, 'MY_SECRET_TOKEN');
+        
+        response.json({ 
+            jwt_token: jwtToken,
+            doctor: doctorData
+        });
+        
+    } catch (error) {
+        console.error('Doctor login error:', error);
+        response.status(500).json({ 
+            error: 'Internal server error', 
+            details: error.message 
+        });
+    }
+});
+
+// Add a helper endpoint to create a test doctor (for development)
+app.post('/create-test-doctor', async (request, response) => {
+    try {
+        const testDoctor = {
+            username: 'drsmith',
+            password: await bcrypt.hash('password123', 10),
+            name: 'Dr. John Smith',
+            specialization: 'Cardiologist',
+            location: 'New York',
+            experience: 15,
+            qualification: 'MD, FACC'
+        };
+
+        const createDoctorQuery = `
+            INSERT INTO doctors (username, password, name, specialization, location, experience, qualification)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `;
+
+        await db.run(createDoctorQuery, [
+            testDoctor.username,
+            testDoctor.password,
+            testDoctor.name,
+            testDoctor.specialization,
+            testDoctor.location,
+            testDoctor.experience,
+            testDoctor.qualification
+        ]);
+
+        response.json({ message: 'Test doctor created successfully' });
+    } catch (error) {
+        console.error('Error creating test doctor:', error);
+        response.status(500).json({ 
+            error: 'Failed to create test doctor',
+            details: error.message 
+        });
+    }
+});
+
+// Add doctor appointments endpoint with better error handling
+app.get('/api/doctor-appointments/:doctorId', async (req, res) => {
+    try {
+        const { doctorId } = req.params;
+        console.log('Fetching appointments for doctor:', doctorId);
+
+        const query = `
+            SELECT 
+                id,
+                user_id,
+                patient_name,
+                date,
+                time,
+                status,
+                symptoms,
+                prescription,
+                diagnosis,
+                notes
+            FROM appointments 
+            WHERE doctor_id = ?
+            ORDER BY 
+                CASE 
+                    WHEN status = 'Upcoming' THEN 1
+                    WHEN status = 'Completed' THEN 2
+                    ELSE 3
+                END,
+                date DESC,
+                time DESC
+        `;
+
+        const appointments = await db.all(query, [doctorId]);
+        console.log(`Found ${appointments.length} appointments for doctor ${doctorId}`);
+
+        res.json(appointments);
+
+    } catch (error) {
+        console.error('Error fetching doctor appointments:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch appointments',
+            details: error.message 
+        });
+    }
+});
+
+// Add patient history endpoint
+app.get('/api/patient-history/:patientId/:doctorId', async (req, res) => {
+    try {
+        const { patientId, doctorId } = req.params;
+        console.log('Fetching patient history:', { patientId, doctorId });
+
+        const query = `
+            SELECT 
+                a.id,
+                a.date,
+                a.time,
+                a.status,
+                a.symptoms,
+                a.prescription,
+                a.diagnosis,
+                a.notes
+            FROM appointments a
+            WHERE a.user_id = ? 
+            AND a.doctor_id = ?
+            ORDER BY a.date DESC, a.time DESC
+        `;
+
+        const history = await db.all(query, [patientId, doctorId]);
+        console.log(`Found ${history.length} historical records`);
+
+        res.json(history);
+
+    } catch (error) {
+        console.error('Error fetching patient history:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch patient history',
+            details: error.message 
+        });
+    }
+});
+
+// Add this helper endpoint to update appointment status
+app.put('/api/appointments/:appointmentId/status', async (req, res) => {
+    try {
+        const { appointmentId } = req.params;
+        const { status } = req.body;
+
+        const query = `
+            UPDATE appointments 
+            SET status = ? 
+            WHERE id = ?
+        `;
+
+        await db.run(query, [status, appointmentId]);
+        res.json({ message: 'Appointment status updated successfully' });
+
+    } catch (error) {
+        console.error('Error updating appointment status:', error);
+        res.status(500).json({ 
+            error: 'Failed to update appointment status',
+            details: error.message 
+        });
+    }
+});
+
 // Initialize the server
-initializeDbAndServe();
+initializeDbAndServe().catch(error => {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+});
 
 module.exports = app;
