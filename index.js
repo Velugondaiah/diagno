@@ -16,7 +16,7 @@ const nodemailer = require('nodemailer');
 require('dotenv').config(); // Load environment variables
 
 // RapidAPI Key - Update this section
-const rapidapiKey = '6ff9f620a3msh1e96a906bb2facfp10b89bjsn80d61791c0b9';
+const rapidapiKey = '63e78f55dcmsh6e43a6115080095p183defjsnc901c1fe526f';
 // Alternatively, you can use environment variable:
 // const rapidapiKey = process.env.RAPIDAPI_KEY || '33169e1b0bmsh020812e008c5a72p16d18bjsn7baf170e0067';
 
@@ -24,7 +24,7 @@ const rapidapiKey = '6ff9f620a3msh1e96a906bb2facfp10b89bjsn80d61791c0b9';
 const app = express();
 app.use(express.json());
 app.use(cors({
-    origin: ['http://localhost:3000','https://diagno-ai-one-api-hack-kpr-3t9i-pvxmba0i0.vercel.app'],
+    origin: ['http://localhost:3001','https://diagno-ai-one-api-hack-kpr-3t9i-pvxmba0i0.vercel.app'],
     methods: ['GET', 'POST'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -172,7 +172,7 @@ const initializeDbAndServe = async () => {
             CREATE TABLE IF NOT EXISTS appointments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 doctor_id INTEGER NOT NULL,
-                patient_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
                 patient_name VARCHAR(50) NOT NULL,
                 gender VARCHAR(10) NOT NULL,
                 age INTEGER NOT NULL,
@@ -183,7 +183,7 @@ const initializeDbAndServe = async () => {
                 specialist VARCHAR(50) NOT NULL,
                 location VARCHAR(50) NOT NULL,
                 FOREIGN KEY (doctor_id) REFERENCES doctors(id),
-                FOREIGN KEY (patient_id) REFERENCES users(id)
+                FOREIGN KEY (user_id) REFERENCES users(id)
             )
         `);
 
@@ -578,27 +578,42 @@ app.post('/login', async (request, response) => {
     try {
         const { username, password } = request.body;
         
-        const selectUserQuery = `SELECT * FROM users WHERE username = ?`;
+        // Make sure to select all necessary fields
+        const selectUserQuery = `
+            SELECT id, username, email, password, firstname, lastname 
+            FROM users 
+            WHERE username = ?
+        `;
+        
         const dbUser = await db.get(selectUserQuery, [username]);
+        console.log('Found user:', dbUser); // Debug log
         
         if (!dbUser) {
-            response.status(400).json({ error: 'User not found' });
-            return;
+            return response.status(400).json({ error: 'User not found' });
         }
 
         const isPasswordMatched = await bcrypt.compare(password, dbUser.password);
         
         if (isPasswordMatched) {
+            // Create user object without sensitive data
+            const userData = {
+                id: dbUser.id,
+                username: dbUser.username,
+                email: dbUser.email,
+                firstname: dbUser.firstname,
+                lastname: dbUser.lastname
+            };
+
             const jwtToken = jwt.sign({ username: username }, 'MY_SECRET_TOKEN');
+            
+            console.log('Sending response:', { 
+                jwt_token: jwtToken, 
+                user: userData 
+            }); // Debug log
+
             response.json({ 
                 jwt_token: jwtToken,
-                user: {
-                    id: dbUser.id,
-                    username: dbUser.username,
-                    firstname: dbUser.firstname,
-                    lastname: dbUser.lastname,
-                    email: dbUser.email
-                }
+                user: userData
             });
         } else {
             response.status(400).json({ error: 'Invalid password' });
@@ -630,11 +645,31 @@ app.get('/api/doctor-locations', async (req, res) => {
 });
 
 app.get("/api/doctor-locations/getDoctors", async (req, res) => {
-    const { location, specialization } = req.query;
-    console.log(location, specialization)
-    const query = `SELECT * FROM doctors WHERE location = ? AND specialization = ?`;
-    const doctors = await db.all(query, [location, specialization]);
-    res.json(doctors);
+    try {
+        const { location, specialization } = req.query;
+        console.log('Fetching doctors with:', { location, specialization });
+
+        const query = `
+            SELECT * FROM doctors 
+            WHERE location = ? 
+            AND specialization = ?
+        `;
+        
+        const doctors = await db.all(query, [location, specialization]);
+        console.log('Found doctors:', doctors);
+
+        if (!doctors || doctors.length === 0) {
+            return res.json([]);
+        }
+
+        res.json(doctors);
+    } catch (error) {
+        console.error('Error fetching doctors:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch doctors',
+            message: error.message 
+        });
+    }
 });
 
 // Add the appointments endpoint
@@ -654,22 +689,7 @@ app.post('/api/appointments', async (req, res) => {
             location
         } = req.body;
 
-        // Double-check availability before proceeding
-        const availabilityCheck = await db.get(
-            `SELECT COUNT(*) as count 
-             FROM appointments 
-             WHERE doctor_id = ? AND date = ? AND time = ?`,
-            [doctor_id, date, time]
-        );
-
-        if (availabilityCheck.count > 0) {
-            return res.status(409).json({
-                message: 'This time slot has already been booked',
-                error: 'Slot unavailable'
-            });
-        }
-
-        // Get user email
+        // Get user email from the database
         const userQuery = 'SELECT email FROM users WHERE id = ?';
         const user = await db.get(userQuery, [user_id]);
 
@@ -687,36 +707,35 @@ app.post('/api/appointments', async (req, res) => {
             });
         }
 
-        // Insert appointment with transaction to ensure atomicity
-        await db.run('BEGIN TRANSACTION');
+        const query = `
+            INSERT INTO appointments (
+                doctor_id,
+                user_id,
+                patient_name,
+                gender,
+                age,
+                date,
+                time,
+                phone_number,
+                address,
+                specialist,
+                location
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
 
-        // Check availability one final time within transaction
-        const finalCheck = await db.get(
-            `SELECT COUNT(*) as count 
-             FROM appointments 
-             WHERE doctor_id = ? AND date = ? AND time = ?`,
-            [doctor_id, date, time]
-        );
-
-        if (finalCheck.count > 0) {
-            await db.run('ROLLBACK');
-            return res.status(409).json({
-                message: 'This time slot has already been booked',
-                error: 'Slot unavailable'
-            });
-        }
-
-        // Proceed with insertion
-        const result = await db.run(
-            `INSERT INTO appointments (
-                doctor_id, user_id, patient_name, gender, age,
-                date, time, phone_number, address, specialist, location
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [doctor_id, user_id, patient_name, gender, age, date, time,
-             phone_number, address, specialist, location]
-        );
-
-        await db.run('COMMIT');
+        const result = await db.run(query, [
+            doctor_id,
+            user_id,
+            patient_name,
+            gender,
+            age,
+            date,
+            time,
+            phone_number,
+            address,
+            specialist,
+            location
+        ]);
 
         // Send confirmation email
         await sendAppointmentEmail(
@@ -735,7 +754,6 @@ app.post('/api/appointments', async (req, res) => {
             id: result.lastID
         });
     } catch (error) {
-        await db.run('ROLLBACK');
         console.error('Error creating appointment:', error);
         res.status(500).json({
             message: 'Failed to create appointment',
