@@ -15,6 +15,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
 }));
 
+
 // Use the routes
 app.use('/api/auth', authRoutes);
 app.use('/api/appointments', appointmentRoutes);
