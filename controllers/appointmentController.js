@@ -1,78 +1,42 @@
-const nodemailer = require('nodemailer');
+const { initializeDb } = require('../models/db');
 
-// Create transporter for email
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: process.env.SMTP_PORT,
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+// Example function to create an appointment
+const createAppointment = async (req, res) => {
+    const { doctorId, userId, patientName, date, time, specialist, location } = req.body;
 
-// Add this function to send appointment confirmation email
-const sendAppointmentConfirmation = async (userEmail, appointmentDetails) => {
-  try {
-    const mailOptions = {
-      from: process.env.SMTP_USER,
-      to: userEmail,
-      subject: 'Appointment Confirmation',
-      html: `
-        <h2>Your Appointment is Confirmed!</h2>
-        <p>Dear ${appointmentDetails.patientName},</p>
-        <p>Your appointment has been successfully booked with the following details:</p>
-        <ul>
-          <li><strong>Doctor:</strong> Dr. ${appointmentDetails.doctorName}</li>
-          <li><strong>Date:</strong> ${appointmentDetails.date}</li>
-          <li><strong>Time:</strong> ${appointmentDetails.time}</li>
-          <li><strong>Location:</strong> ${appointmentDetails.location}</li>
-          <li><strong>Specialist:</strong> ${appointmentDetails.specialist}</li>
-        </ul>
-        <p>Please arrive 10 minutes before your scheduled appointment time.</p>
-        <p>If you need to reschedule or cancel your appointment, please contact us.</p>
-        <br>
-        <p>Best regards,</p>
-        <p>Your Healthcare Team</p>
-      `
-    };
-
-    await transporter.sendMail(mailOptions);
-    return true;
-  } catch (error) {
-    console.error('Email sending failed:', error);
-    return false;
-  }
-};
-
-app.post('/api/appointments', async (req, res) => {
-  try {
-    // ... existing appointment creation code ...
-
-    // After successful appointment creation, send email
-    const userQuery = 'SELECT email FROM users WHERE id = ?';
-    const userResult = await db.get(userQuery, [req.body.user_id]);
-
-    if (userResult && userResult.email) {
-      await sendAppointmentConfirmation(userResult.email, {
-        patientName: req.body.patient_name,
-        doctorName: req.body.doctor_name,
-        date: req.body.date,
-        time: req.body.time,
-        location: req.body.location,
-        specialist: req.body.specialist
-      });
+    if (!doctorId || !userId || !patientName || !date || !time || !specialist || !location) {
+        return res.status(400).json({ error: 'All fields are required' });
     }
 
-    res.status(201).json({
-      message: 'Appointment created successfully and confirmation email sent',
-      id: result.lastID
-    });
-  } catch (error) {
-    console.error('Error in appointment booking:', error);
-    res.status(500).json({
-      message: 'Failed to create appointment',
-      error: error.message
-    });
-  }
-}); 
+    const db = await initializeDb();
+    const createAppointmentQuery = `
+        INSERT INTO appointments (doctor_id, user_id, patient_name, date, time, specialist, location)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    try {
+        const dbResponse = await db.run(createAppointmentQuery, [doctorId, userId, patientName, date, time, specialist, location]);
+        res.status(201).json({ message: 'Appointment created successfully', appointmentId: dbResponse.lastID });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create appointment', details: error.message });
+    }
+};
+
+// Example function to get appointments for a user
+const getUserAppointments = async (req, res) => {
+    const { userId } = req.params;
+
+    const db = await initializeDb();
+    const getAppointmentsQuery = `
+        SELECT * FROM appointments WHERE user_id = ? ORDER BY date, time
+    `;
+
+    try {
+        const appointments = await db.all(getAppointmentsQuery, [userId]);
+        res.json(appointments);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch appointments', details: error.message });
+    }
+};
+
+module.exports = { createAppointment, getUserAppointments }; 
