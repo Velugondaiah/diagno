@@ -15,7 +15,7 @@ const translate = require('translate-google');
 require('dotenv').config(); // Load environment variables
 
 // RapidAPI Key - Update this section
-const rapidapiKey = '33169e1b0bmsh020812e008c5a72p16d18bjsn7baf170e0067';
+const rapidapiKey = '54bd8d45b5mshbda6cdbbee7fe51p1ad5bfjsn9363f2cba62e';
 // Alternatively, you can use environment variable:
 // const rapidapiKey = process.env.RAPIDAPI_KEY || '33169e1b0bmsh020812e008c5a72p16d18bjsn7baf170e0067';
 
@@ -24,20 +24,10 @@ const app = express();
 app.use(express.json());
 app.use(cors({
     origin: 'http://localhost:3000',
-    methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
 }));
-
-// Add CORS headers
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
-    next();
-});
 
 // SQLite DB Path
 const dbPath = path.join(__dirname, 'diagonalasis.db');
@@ -45,6 +35,24 @@ let db = null;
 
 // Set up multer for file uploads
 const upload = multer({ dest: 'uploads/' });
+
+// First, define the middleware at the top of your file, after your imports
+const authenticateToken = (request, response, next) => {
+    const authHeader = request.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+        return response.status(401).json({ error: 'Authentication required' });
+    }
+
+    jwt.verify(token, 'MY_SECRET_TOKEN', (err, user) => {
+        if (err) {
+            return response.status(403).json({ error: 'Invalid token' });
+        }
+        request.user = user;
+        next();
+    });
+};
 
 // Add the check-availability endpoint
 app.get('/api/appointments/check-availability', async (req, res) => {
@@ -113,6 +121,7 @@ const initializeDbAndServe = async () => {
             CREATE TABLE IF NOT EXISTS appointments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 doctor_id INTEGER NOT NULL,
+                patient_id INTEGER NOT NULL,
                 patient_name VARCHAR(50) NOT NULL,
                 gender VARCHAR(10) NOT NULL,
                 age INTEGER NOT NULL,
@@ -122,7 +131,8 @@ const initializeDbAndServe = async () => {
                 address VARCHAR(255) NOT NULL,
                 specialist VARCHAR(50) NOT NULL,
                 location VARCHAR(50) NOT NULL,
-                FOREIGN KEY (doctor_id) REFERENCES doctors(id)
+                FOREIGN KEY (doctor_id) REFERENCES doctors(id),
+                FOREIGN KEY (patient_id) REFERENCES users(id)
             )
         `);
 
@@ -528,9 +538,18 @@ app.post('/login', async (request, response) => {
         const isPasswordMatched = await bcrypt.compare(password, dbUser.password);
         
         if (isPasswordMatched) {
-            const jwtToken = jwt.sign({ username: username }, 'MY_SECRET_TOKEN');
-            response.json({ 
+            const jwtToken = jwt.sign(
+                { 
+                    username: dbUser.username,
+                    id: dbUser.id 
+                }, 
+                'MY_SECRET_TOKEN',
+                { expiresIn: '24h' }
+            );
+            
+            console.log('Sending login response:', { // Debug log
                 jwt_token: jwtToken,
+                user_id: dbUser.id,
                 user: {
                     id: dbUser.id,
                     username: dbUser.username,
@@ -538,6 +557,19 @@ app.post('/login', async (request, response) => {
                     lastname: dbUser.lastname,
                     email: dbUser.email
                 }
+            });
+
+            response.json({ 
+                jwt_token: jwtToken,
+                user_id: dbUser.id,
+                user: {
+                    id: dbUser.id,
+                    username: dbUser.username,
+                    firstname: dbUser.firstname,
+                    lastname: dbUser.lastname,
+                    email: dbUser.email
+                },
+                message: 'Login Success' 
             });
         } else {
             response.status(400).json({ error: 'Invalid password' });
@@ -633,6 +665,70 @@ app.post('/api/appointments', async (req, res) => {
         res.status(500).json({
             message: 'Failed to create appointment',
             error: error.message
+        });
+    }
+});
+
+// Get user profile endpoint
+app.get('/api/user/:userId', authenticateToken, async (request, response) => {
+    try {
+        const { userId } = request.params;
+        
+        const getUserQuery = `
+            SELECT * FROM users 
+            WHERE id = ?
+        `;
+        
+        db.get(getUserQuery, [userId], (err, row) => {
+            if (err) {
+                console.error('Database error:', err);
+                return response.status(500).json({ 
+                    error: 'Failed to fetch user details',
+                    details: err.message 
+                });
+            }
+            
+            if (!row) {
+                return response.status(404).json({ 
+                    error: 'User not found' 
+                });
+            }
+
+            // Remove sensitive information before sending
+            const { password, ...userDetails } = row;
+            return response.json(userDetails);
+        });
+
+    } catch (error) {
+        console.error('Server error:', error);
+        response.status(500).json({ 
+            error: 'Internal server error', 
+            details: error.message 
+        });
+    }
+});
+
+// Get user appointments endpoint
+app.get('/api/appointments/:userId', async (request, response) => {
+    try {
+        const { userId } = request.params;
+        
+        const query = `
+            SELECT a.*, d.name as doctor_name
+            FROM appointments a
+            LEFT JOIN doctors d ON a.doctor_id = d.id
+            WHERE a.patient_id = ?
+            ORDER BY a.date DESC, a.time DESC
+        `;
+        
+        const appointments = await db.all(query, [userId]);
+        
+        response.json(appointments);
+    } catch (error) {
+        console.error('Error fetching appointments:', error);
+        response.status(500).json({ 
+            error: 'Internal server error', 
+            details: error.message 
         });
     }
 });
