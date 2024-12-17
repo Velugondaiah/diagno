@@ -18,10 +18,14 @@
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
     "fs": "^0.0.1-security",
+    "google-tts-api": "^2.0.2",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
     "mysql2": "^2.3.3",
+<<<<<<< HEAD
     "node-tesseract-ocr": "^2.2.1",
+=======
+>>>>>>> 16e114e57a8f1cf485b6b66d8093a769d966cd90
     "nodemailer": "^6.9.16",
     "path": "^0.12.7",
     "pdf-parse": "^1.1.1",
