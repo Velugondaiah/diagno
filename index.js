@@ -10,9 +10,8 @@ dotenv.config(); // Load environment variables
 const app = express();
 app.use(express.json());
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002'],
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
+    origin: 'http://localhost:3000/',
+    credentials: true
 }));
 
 
