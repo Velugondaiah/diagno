@@ -6,7 +6,7 @@ const appointmentRoutes = require('./routes/appointmentRoutes');
 const userRoutes = require('./routes/userRoutes');
 
 dotenv.config(); // Load environment variables
-
+   const bcrypt = require('bcrypt');
 const app = express();
 app.use(express.json());
 app.use(cors({
