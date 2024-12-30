@@ -1,12 +1,6 @@
-// Import required modules
 const express = require('express');
-const { open } = require('sqlite');
-const sqlite3 = require('sqlite3');
-const path = require('path');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
-const multer = require('multer');
 const cors = require('cors');
+<<<<<<< HEAD
 const fs = require('fs');
 const Tesseract = require('tesseract.js');
 const axios = require('axios');
@@ -1283,3 +1277,30 @@ initializeDbAndServe().catch(error => {
 });
 
 module.exports = app;
+=======
+const dotenv = require('dotenv');
+const authRoutes = require('./routes/authRoutes');
+const appointmentRoutes = require('./routes/appointmentRoutes');
+const userRoutes = require('./routes/userRoutes');
+
+dotenv.config(); // Load environment variables
+   const bcrypt = require('bcrypt');
+const app = express();
+app.use(express.json());
+app.use(cors({
+    origin: 'http://localhost:3000',
+    credentials: true
+}));
+
+
+// Use the routes
+app.use('/api/auth', authRoutes);
+app.use('/api/appointments', appointmentRoutes);
+app.use('/api/users', userRoutes);
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+});
+>>>>>>> 04b988b036998a14967f0513e87c9d44dc954997
